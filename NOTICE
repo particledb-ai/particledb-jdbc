@@ -1,0 +1,28 @@
+ParticleDB JDBC Driver
+Copyright (c) 2026 Orkes, Inc.
+
+This product is licensed under the MIT License (see LICENSE).
+
+-------------------------------------------------------------------------------
+Third-party material
+-------------------------------------------------------------------------------
+
+Conductor PostgreSQL schema migrations (test fixture only)
+
+  The files under
+
+    src/test/resources/db/conductor/migration_postgres/
+    src/test/resources/db/conductor/migration_postgres_data/
+
+  are unmodified copies of the PostgreSQL Flyway migrations from Conductor
+  (https://github.com/conductor-oss/conductor, module postgres-persistence,
+  path src/main/resources/db/), originally developed by Netflix, Inc. and the
+  Conductor authors.
+
+  Copyright Netflix, Inc. and the Conductor authors.
+  Licensed under the Apache License, Version 2.0. A copy of the license is in
+  src/test/resources/db/conductor/LICENSE-APACHE-2.0 and at
+  https://www.apache.org/licenses/LICENSE-2.0
+
+  These files are used only by the test suite (ConductorFlywayMigrationTest)
+  and are not included in the published driver jar.

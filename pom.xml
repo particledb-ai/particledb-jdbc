@@ -1,0 +1,483 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>ai.particledb</groupId>
+    <artifactId>particledb-jdbc</artifactId>
+    <version>1.0.11</version>
+    <packaging>jar</packaging>
+
+    <name>ParticleDB JDBC Driver (PDB-wire v2)</name>
+    <description>
+        Native PDB-wire JDBC driver. Multiplexed (HTTP/2-style) over one TCP
+        connection with N concurrent streams. Falls back to v1 single-stream
+        when talking to v1 servers. Pure Java/Netty — no JNI, no pgjdbc.
+        Requires Java 11 or later; no JVM flags are needed on any JDK.
+    </description>
+    <url>https://particledb.ai/sdks/java/</url>
+
+    <inceptionYear>2026</inceptionYear>
+    <organization>
+        <name>Orkes, Inc.</name>
+        <url>https://particledb.ai</url>
+    </organization>
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <maven.compiler.release>11</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <netty.version>4.1.139.Final</netty.version>
+        <arrow.version>15.0.2</arrow.version>
+        <junit.version>5.10.2</junit.version>
+        <slf4j.version>2.0.20</slf4j.version>
+
+        <!-- Default signing key: the v2 Maven Central key for ai.particledb.
+             Two keys live in the release keyring and gpg would otherwise pick
+             the older one, failing with a bare "Bad passphrase". -->
+        <gpg.keyname>3736269DB424C52A</gpg.keyname>
+
+        <!-- When true, PdbTestServer.tryStart() FAILS instead of returning
+             null, so a build cannot silently attest nothing. 21 of 36 test
+             classes are gated on a live server; with no binary present they
+             all skipped and the build still went green. The `release` profile
+             turns this on. -->
+        <pdb.require.server>false</pdb.require.server>
+    </properties>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/license/mit/</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>particledb</id>
+            <name>ParticleDB Engineering</name>
+            <email>eng@particledb.ai</email>
+            <organization>Orkes, Inc.</organization>
+            <organizationUrl>https://particledb.ai</organizationUrl>
+        </developer>
+    </developers>
+
+    <scm>
+        <url>https://github.com/particledb-ai/particledb-jdbc</url>
+        <connection>scm:git:https://github.com/particledb-ai/particledb-jdbc.git</connection>
+        <developerConnection>scm:git:git@github.com:particledb-ai/particledb-jdbc.git</developerConnection>
+    </scm>
+
+    <issueManagement>
+        <system>GitHub</system>
+        <url>https://github.com/particledb-ai/particledb-jdbc/issues</url>
+    </issueManagement>
+
+    <!--
+        DependencyManagement: pin every netty-* module to one version. Without
+        this block, a consumer that also pulls in Apache Arrow's
+        arrow-memory-netty (which depends on netty-common 4.1.104) ends up with
+        mixed netty versions on the classpath, and Netty's event loop hangs
+        silently at HELLO handshake time. See samples/ for a
+        repro before this fix.
+    -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>2.22.4</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Netty: async TCP I/O, single event-loop per conn.
+             netty-common pulled in transitively via netty-handler; declare
+             explicitly so consumers don't pull a stale version. -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-handler</artifactId>
+            <version>${netty.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport</artifactId>
+            <version>${netty.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec</artifactId>
+            <version>${netty.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-buffer</artifactId>
+            <version>${netty.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-common</artifactId>
+            <version>${netty.version}</version>
+        </dependency>
+
+        <!-- Apache Arrow Java: OPTIONAL, never transitive to consumers.
+             Results (Arrow IPC) are decoded by the driver's own pure-Java
+             reader (ArrowIpcReader) and bulk-ingest rows are written by its
+             own heap writer (ArrowIpcWriter), so the driver runs a SELECT of
+             any column type with no Arrow jar and no JVM flag. Arrow Java is
+             used only where the application asks for it, and the application
+             then adds it itself:
+               * resultDecoder=arrow decodes results with Arrow Java
+                 (ArrowJavaDecoder; JDK 16+ also needs
+                 add-opens java.base/java.nio=ALL-UNNAMED);
+               * PdbConnection.bulkLoad(ArrowReader | VectorSchemaRoot ...)
+                 takes the caller's own Arrow vectors (ArrowBulk).
+             Tests use it to build golden IPC streams and as the
+             differential oracle. -->
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <version>${arrow.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+            <version>${arrow.version}</version>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- SLF4J for logging (no binding by default) -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>${slf4j.version}</version>
+        </dependency>
+
+        <!-- Tests -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>${slf4j.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            TEST SCOPE ONLY — never shipped, never transitive to consumers.
+
+            org.postgresql is the REFERENCE IMPLEMENTATION of the JDBC surfaces
+            this driver has to match: PgOracleDifferentialTest asks pgjdbc and a
+            real PostgreSQL what each contract answer is, instead of taking one
+            reading of the spec as the oracle. The test pins the server's
+            identity (version() must be PostgreSQL, and must not be ParticleDB)
+            before believing a single answer, and skips entirely when no such
+            server is reachable.
+        -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.4</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            TEST SCOPE ONLY. Flyway at the version Orkes Conductor OSS pins
+            (dependencies.gradle revFlyway), so ConductorFlywayMigrationTest
+            runs Conductor's own migrations through this driver exactly as
+            Conductor's flywayForPrimaryDb bean does at boot.
+        -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+            <version>10.15.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+            <version>10.15.2</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- TEST SCOPE ONLY. The pool Conductor (Spring Boot 3.3) runs this
+             driver under; the pool-reuse regressions borrow and return real
+             Hikari connections rather than a hand-written imitation. -->
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <version>5.1.0</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>particledb-jdbc-${project.version}</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <!-- UNSTRIPPED build: keep FULL debug info (line numbers +
+                         local variable tables + source file) in the shipped
+                         .class files, so production stack traces and debuggers
+                         resolve line/variable info. Plain javac defaults to
+                         lines+source only (no local-variable table). -->
+                    <debug>true</debug>
+                    <debuglevel>lines,vars,source</debuglevel>
+                </configuration>
+            </plugin>
+
+            
+            <!-- Two test runs. The default one passes NO JVM flags at all:
+                 the driver must work on a plain JVM, and a suite that adds
+                 module flags hides a regression (it once did). Only
+                 the classes tagged "arrow-java" (they call Apache Arrow Java
+                 themselves: golden builders, the differential oracle, the
+                 Arrow bulkLoad API) run in a second pass with the flag Arrow
+                 Java needs. ArrowModuleFlagsTest additionally runs child JVMs
+                 with and without the flag. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <systemPropertyVariables>
+                        <PDB_TEST_PORT>${env.PDB_TEST_PORT}</PDB_TEST_PORT>
+                        <PDB_TEST_HOST>${env.PDB_TEST_HOST}</PDB_TEST_HOST>
+                        <PDB_BIN>${env.PDB_BIN}</PDB_BIN>
+                        <pdb.requireServer>${pdb.require.server}</pdb.requireServer>
+                    </systemPropertyVariables>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>default-test</id>
+                        <configuration>
+                            <excludedGroups>arrow-java</excludedGroups>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>arrow-java-tests</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <groups>arrow-java</groups>
+                            <argLine>--add-opens=java.base/java.nio=ALL-UNNAMED</argLine>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Source jar for Maven Central -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar-no-fork</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Javadoc jar for Maven Central -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.7.0</version>
+                <configuration>
+                    <doclint>none</doclint>
+                    <docfilessubdirs>true</docfilessubdirs>
+                    <failOnError>true</failOnError>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <!-- distributionManagement intentionally omitted: the modern
+         central-publishing-maven-plugin (Sonatype Central Portal) takes
+         care of staging + publishing without needing the legacy OSSRH
+         distMgmt block. See the release profile below. -->
+
+    <profiles>
+        <profile>
+            <id>java11</id>
+            <activation><jdk>[11,17)</jdk></activation>
+            <build><plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <configuration><testExcludes>
+                        <testExclude>**/ConductorFlywayMigrationTest.java</testExclude>
+                    </testExcludes></configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <configuration><excludes>
+                        <exclude>**/ConductorFlywayMigrationTest.java</exclude>
+                    </excludes></configuration>
+                </plugin>
+            </plugins></build>
+        </profile>
+
+        <!--
+            Activate with:  mvn -P release deploy
+            Requires:
+              1) ~/.m2/settings.xml has a server entry with id "central"
+                 holding Sonatype Central Portal user-token credentials.
+              2) GPG key available to maven-gpg-plugin. Run
+                 gpg(1) list-secret-keys to confirm; pass the fingerprint
+                 via -Dgpg.keyname=FP if multiple keys are present.
+        -->
+        <!-- The shaded uber-jar is NOT published to Maven Central.
+             It bundles Arrow, Netty, Jackson and eclipse-collections WITHOUT
+             relocation, and the thin jar already declares those same artifacts
+             as normal transitive dependencies — so a consumer selecting
+             classifier `all` resolves the uber-jar PLUS separate copies of
+             every embedded library, and classpath order decides which class
+             wins. Dependency mediation cannot remove bytes from inside a jar,
+             so a BOM, an exclusion or a security upgrade cannot fix it either.
+             It was also ~97% of the release payload (18.64 MB of 19.2 MB).
+             The single-jar use case is served from the S3 / get.particledb.ai
+             channel instead. Build it deliberately:  mvn -P uber package
+             `shadedArtifactAttached=false` is NOT the way to stop publishing
+             it — that makes the shaded jar REPLACE the main artifact. -->
+        <profile>
+            <id>uber</id>
+            <build>
+                <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-shade-plugin</artifactId>
+                    <version>3.5.3</version>
+                    <executions>
+                        <execution>
+                            <phase>package</phase>
+                            <goals>
+                                <goal>shade</goal>
+                            </goals>
+                            <configuration>
+                                <shadedArtifactAttached>true</shadedArtifactAttached>
+                                <shadedClassifierName>all</shadedClassifierName>
+                                <createDependencyReducedPom>false</createDependencyReducedPom>
+                                <filters>
+                                    <filter>
+                                        <artifact>*:*</artifact>
+                                        <excludes>
+                                            <exclude>META-INF/*.SF</exclude>
+                                            <exclude>META-INF/*.DSA</exclude>
+                                            <exclude>META-INF/*.RSA</exclude>
+                                            <exclude>module-info.class</exclude>
+                                        </excludes>
+                                    </filter>
+                                </filters>
+                                <transformers>
+                                    <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                </transformers>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>release</id>
+            <properties>
+                <!-- A release must be tested against a server the releaser
+                     built from the commit being released. PDB_BIN has to be
+                     set explicitly; the harness refuses to guess a path under
+                     this profile. -->
+                <pdb.require.server>true</pdb.require.server>
+            </properties>
+            <build>
+                <plugins>
+                    <!-- Sign all artifacts (jar, sources jar, javadoc jar, pom) -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.4</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <!-- PIN THE SIGNING KEY. The keyring holds two
+                                         ai.particledb keys and gpg picks the FIRST
+                                         (FEB1166A…, 2026-05-19) when no keyname is
+                                         given — which is not the one whose passphrase
+                                         is in the release environment, so an
+                                         otherwise-correct release dies at
+                                         "gpg: signing failed: Bad passphrase" with
+                                         nothing naming the key as the cause.
+                                         Override per-invocation with -Dgpg.keyname. -->
+                                    <keyname>${gpg.keyname}</keyname>
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- Sonatype Central Portal publisher (new flow, replaces OSSRH).
+                         Uploads to https://central.sonatype.com and stages a
+                         deployment that the user releases interactively from the
+                         portal UI (or by setting <autoPublish>true</autoPublish>). -->
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <!-- 0.5.0 cannot deserialize the current Central status
+                             response: the API now returns a "warnings" array and
+                             0.5.0's model rejects it with
+                             UnrecognizedPropertyException, failing the build
+                             AFTER the bundle has already uploaded. -->
+                        <version>0.11.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>false</autoPublish>
+                            <waitUntil>validated</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

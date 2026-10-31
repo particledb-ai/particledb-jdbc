@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>ai.particledb.samples</groupId>
+    <artifactId>particledb-jdbc-samples</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>ParticleDB JDBC Samples</name>
+    <description>
+        Runnable samples for ai.particledb:particledb-jdbc. Each main class
+        in src/main/java/ai/particledb/jdbc/samples/ is a self-contained
+        scenario: connect, CRUD, transactions, TLS, HikariCP pooling, and
+        the pgjdbc 5-SELECT prepared-statement-reuse regression. Not a
+        published artifact.
+    </description>
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <netty.version>4.1.115.Final</netty.version>
+    </properties>
+
+    <!-- Force one Netty version across the whole tree. arrow-memory-netty
+         declares netty-common 4.1.104; without this BOM Maven resolves a
+         mixed-version Netty and the event loop hangs at the HELLO handshake. -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>ai.particledb</groupId>
+            <artifactId>particledb-jdbc</artifactId>
+            <version>1.0.11</version>
+        </dependency>
+
+        <!--
+            Arrow IPC decoder transitive deps. The JDBC artifact marks these
+            <optional>true</optional> so apps that only run DDL/DML can skip
+            ~12 MB of jars. Any SELECT result set comes back as Arrow IPC, so
+            samples pull them in explicitly.
+        -->
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <version>15.0.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+            <version>15.0.2</version>
+        </dependency>
+
+        <!-- HikariCP for the connection-pool sample -->
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <version>5.1.0</version>
+        </dependency>
+
+        <!-- pgjdbc for the "use pgjdbc against PDB's PG wire" sample.
+             Demonstrates that PDB engine is wire-compatible with stock
+             pgjdbc, and shows the 5-SELECT regression repro working. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.4</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>2.0.13</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.2.0</version>
+                <!--
+                    Default goal is exec:exec (forked JVM with explicit
+                    flags) so users can simply run:
+                        mvn exec:exec -Dexec.mainClass=ai.particledb.jdbc.samples.HelloWorld
+
+                    Arrow IPC decode (used by PdbResultSet for SELECT result
+                    sets) reflects into ByteBuffer internals — the JVM flags
+                    below are required.
+                -->
+                <configuration>
+                    <executable>${java.home}/bin/java</executable>
+                    <arguments>
+                        <argument>--add-opens=java.base/java.nio=ALL-UNNAMED</argument>
+                        <argument>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</argument>
+                        <argument>-Dio.netty.tryReflectionSetAccessible=true</argument>
+                        <argument>-classpath</argument>
+                        <classpath/>
+                        <argument>${exec.mainClass}</argument>
+                    </arguments>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
