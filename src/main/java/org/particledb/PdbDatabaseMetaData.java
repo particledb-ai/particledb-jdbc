@@ -484,11 +484,34 @@ public final class PdbDatabaseMetaData implements DatabaseMetaData {
         return columns;
     }
 
-    private static int[] catalogPositions(Object value) {
-        if (value == null) return new int[0];
+    private static int[] catalogPositions(Object value) throws SQLException {
+        return java.util.Arrays.stream(catalogElements(value)).mapToInt(Integer::parseInt).toArray();
+    }
+
+    /**
+     * The elements of a catalog key list ({@code conkey}, {@code confkey},
+     * {@code indkey}, {@code indoption}) as text. A server that types the
+     * column as an array ({@code int2[]}) answers a {@link java.sql.Array},
+     * whose {@code toString} carries a {@code ::int2[]} suffix, so its
+     * elements are read directly; a text value ({@code {1,2}} or the
+     * space-separated {@code int2vector} form) is split.
+     */
+    private static String[] catalogElements(Object value) throws SQLException {
+        if (value == null) return new String[0];
+        if (value instanceof java.sql.Array) {
+            Object elements = ((java.sql.Array) value).getArray();
+            if (elements instanceof Object[]) {
+                Object[] items = (Object[]) elements;
+                String[] out = new String[items.length];
+                for (int i = 0; i < items.length; i++) {
+                    if (items[i] == null) throw new SQLException("NULL in a catalog key list", "XX000");
+                    out[i] = items[i].toString().trim();
+                }
+                return out;
+            }
+        }
         String text = str(value).replaceAll("[{}]", "").trim();
-        if (text.isEmpty()) return new int[0];
-        return java.util.Arrays.stream(text.split("[ ,]+")).mapToInt(Integer::parseInt).toArray();
+        return text.isEmpty() ? new String[0] : text.split("[ ,]+");
     }
 
     private static short ruleCode(String rule) {
@@ -565,10 +588,8 @@ public final class PdbDatabaseMetaData implements DatabaseMetaData {
                 }
                 attributes.put(oid, names);
             }
-            String keys = str(r[5]).replaceAll("[{}]", "").trim();
-            String[] positions = keys.isEmpty() ? new String[0] : keys.split("[ ,]+");
-            String options = r[6] == null ? "" : str(r[6]).replaceAll("[{}]", "").trim();
-            String[] ordering = options.isEmpty() ? new String[0] : options.split("[ ,]+");
+            String[] positions = catalogElements(r[5]);
+            String[] ordering = catalogElements(r[6]);
             int keyCount = r[7] == null ? positions.length : Integer.parseInt(str(r[7]));
             for (int ordinal = 0; ordinal < positions.length && ordinal < keyCount; ordinal++) {
                 int position = Integer.parseInt(positions[ordinal]);

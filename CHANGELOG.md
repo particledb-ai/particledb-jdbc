@@ -22,6 +22,18 @@ Works with ParticleDB server 1.1.19-rc.17.
 - **`Statement.cancel()` is bounded.** It only reset the stream; a server that
   never answered left the caller blocked. Now the connection is aborted if the
   reset is unanswered after the cancel grace (5 s), as for a query timeout.
+- **Foreign-key metadata on servers from 1.1.19-rc.17.** `getImportedKeys`,
+  `getExportedKeys` and `getCrossReference` threw `NumberFormatException`
+  (`For input string: "2::int2[]"`): those servers type
+  `pg_constraint.conkey` / `confkey` as `int2[]`, and the driver parsed the
+  array's display text. The key lists are now read as array elements (text
+  forms still parse), also for `getIndexInfo`'s `indkey` / `indoption`.
+
+### Changed
+- The 1.0.11 known issue (a numeric special typed only by a literal, such as
+  `SELECT 'NaN'::numeric`, reading as a `String`) is gone with servers from
+  1.1.19-rc.17, which type those values; the PostgreSQL 17 differential test
+  now holds them to pgjdbc's behaviour.
 
 ### Added
 - **Slow-call warning.** `slowCallWarnMillis` (default 60000, 0 disables):

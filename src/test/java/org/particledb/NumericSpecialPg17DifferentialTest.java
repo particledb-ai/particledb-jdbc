@@ -55,17 +55,9 @@ public class NumericSpecialPg17DifferentialTest {
         "SELECT max(d) AS v FROM " + TABLE,
         "SELECT n::float8 AS v FROM " + TABLE + " ORDER BY id",
         "SELECT 'NaN'::text AS v",
-    };
-
-    /**
-     * Numeric specials typed by a literal or a cast of one. rc.13 sends these
-     * over the native wire as a bare Utf8 column with no {@code pdb:decl}
-     * stamp, the same shape as a text value, so no driver can tell
-     * {@code 'NaN'::numeric} from {@code 'NaN'::text}; they read as text. The
-     * server's PG wire advertises them as numeric. When the server stamps
-     * them this test fails: move them into {@link #QUERIES}.
-     */
-    private static final String[] UNSTAMPED_LITERALS = {
+        // Numeric specials typed only by a literal or a cast of one. Through
+        // rc.16 the server sent these as untyped text over the native wire;
+        // rc.17 stamps them numeric, so they are held to the oracle as well.
         "SELECT 'NaN'::numeric AS v", "SELECT 'Infinity'::numeric AS v", "SELECT '-Infinity'::numeric AS v",
         "SELECT 'NaN'::numeric(10,2) AS v", "SELECT 'Infinity'::numeric + 1 AS v",
         "SELECT CAST('NaN'::float8 AS numeric) AS v",
@@ -209,19 +201,5 @@ public class NumericSpecialPg17DifferentialTest {
         assertTrue(want.contains("S SELECT r, d, n FROM " + TABLE
                 + " ORDER BY id | row 1 | n | getBigDecimal = ERR 22003 Bad value for type BigDecimal : NaN"));
         assertSameLines(want, got);
-    }
-
-    @Test
-    void unstampedNumericLiteralsStillReadAsText() throws Exception {
-        try (Connection n = nat(); Statement st = n.createStatement()) {
-            for (String sql : UNSTAMPED_LITERALS) {
-                try (ResultSet rs = st.executeQuery(sql)) {
-                    assertTrue(rs.next(), sql);
-                    assertEquals("text", rs.getMetaData().getColumnTypeName(1), sql
-                            + ": now typed by the server; move it into QUERIES");
-                    assertEquals(String.class, rs.getObject(1).getClass(), sql);
-                }
-            }
-        }
     }
 }
