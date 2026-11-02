@@ -38,6 +38,26 @@ public final class WireV2Codec extends ByteToMessageDecoder {
     public static final int MAX_PAYLOAD = 16 * 1024 * 1024;
 
     // ── Frame types - Client → Server ─────────────────────────────────────
+    /** A request message type's name for diagnostics ({@code QUERY}, {@code EXECUTE}, ...). */
+    public static String messageTypeName(byte type) {
+        switch (type) {
+            case MSG_QUERY: return "QUERY";
+            case MSG_BATCH: return "BATCH";
+            case MSG_PING: return "PING";
+            case MSG_AUTH: return "AUTH";
+            case MSG_KV_SET: return "KV_SET";
+            case MSG_KV_GET: return "KV_GET";
+            case MSG_KV_DEL: return "KV_DEL";
+            case MSG_KV_INCR: return "KV_INCR";
+            case MSG_PREPARE: return "PREPARE";
+            case MSG_EXECUTE: return "EXECUTE";
+            case MSG_CLOSE_STMT: return "CLOSE_STMT";
+            case MSG_QUEUE: return "QUEUE";
+            case MSG_BULK: return "BULK";
+            default: return "0x" + Integer.toHexString(type & 0xFF);
+        }
+    }
+
     public static final byte MSG_HELLO         = 0x00;
     public static final byte MSG_QUERY         = 0x01;
     public static final byte MSG_BATCH         = 0x02;

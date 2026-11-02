@@ -178,12 +178,19 @@ final class StreamedRows {
                     if (c == null) return false;
                 } else {
                     try {
-                        mux.driveUntil(stream, stream::chunkReady, deadline);
+                        connection.waitWarning(stream, deadline, until -> {
+                            mux.driveUntil(stream, stream::chunkReady, until);
+                            return null;
+                        });
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         throw new SQLException("interrupted while streaming a result", "57014", ie);
                     } catch (java.util.concurrent.TimeoutException te) {
                         throw connection.networkTimeout(te);
+                    } catch (SQLException | RuntimeException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        throw PdbConnection.mapException(e);
                     }
                     continue;
                 }

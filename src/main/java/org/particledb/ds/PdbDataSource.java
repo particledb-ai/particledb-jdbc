@@ -40,6 +40,10 @@ public final class PdbDataSource implements DataSource {
     private String unixSocketPath; // explicit socket; never falls back to TCP
     // Canonical default per the "URL options" table in README.md
     private int connectTimeout = 30_000;
+    /** Network timeout, milliseconds; 0 = none (the URL's {@code socketTimeout}). */
+    private int socketTimeout = 0;
+    /** The URL's {@code slowCallWarnMillis}; 0 disables the slow-call warning. */
+    private int slowCallWarnMillis = 60_000;
     private boolean raiseExceptionOnSilentRollback = false;
     private boolean allowDdlOutsideTransaction = false;
     private String resultDecoder = "auto"; // auto | arrow | builtin, validated at connect
@@ -88,6 +92,10 @@ public final class PdbDataSource implements DataSource {
     public boolean isAllowDdlOutsideTransaction() { return allowDdlOutsideTransaction; }
     public void setConnectTimeout(int ms) { this.connectTimeout = ms; }
     public int getConnectTimeout() { return connectTimeout; }
+    public void setSocketTimeout(int ms) { this.socketTimeout = ms; }
+    public int getSocketTimeout() { return socketTimeout; }
+    public void setSlowCallWarnMillis(int ms) { this.slowCallWarnMillis = ms; }
+    public int getSlowCallWarnMillis() { return slowCallWarnMillis; }
 
     @Override
     public Connection getConnection() throws SQLException {
@@ -112,6 +120,8 @@ public final class PdbDataSource implements DataSource {
         if (unixSocketDir != null)  p.put("unixSocketDir", unixSocketDir);
         if (unixSocketPath != null) p.put("unixSocketPath", unixSocketPath);
         p.put("connectTimeout", String.valueOf(connectTimeout));
+        p.put("socketTimeout", String.valueOf(socketTimeout));
+        p.put("slowCallWarnMillis", String.valueOf(slowCallWarnMillis));
         p.put("loginTimeout", String.valueOf(loginTimeout));
         p.put("raiseExceptionOnSilentRollback", String.valueOf(raiseExceptionOnSilentRollback));
         p.put("allowDdlOutsideTransaction", String.valueOf(allowDdlOutsideTransaction));

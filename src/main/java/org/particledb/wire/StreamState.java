@@ -24,6 +24,17 @@ public final class StreamState {
     public final long streamId;
     private volatile State state = State.IDLE;
 
+    /** The request's message type (MSG_QUERY, MSG_EXECUTE, ...), set when it is sent; 0 until then. */
+    volatile byte requestType;
+    /** {@link System#nanoTime} of the last frame received on this stream; 0 = none yet. */
+    volatile long lastInboundNanos;
+
+    /** The request's kind for diagnostics (QUERY, EXECUTE, ...); never its content. */
+    public String requestKind() { return WireV2Codec.messageTypeName(requestType); }
+
+    /** {@link System#nanoTime} of the last frame this stream received, or 0. */
+    public long lastInboundNanos() { return lastInboundNanos; }
+
     // Result accumulator
     private final List<byte[]> arrowChunks = new ArrayList<>();
     private byte resultType = 0;          // first server msgType seen
@@ -149,6 +160,7 @@ public final class StreamState {
     }
 
     public synchronized boolean onInbound(WireV2Codec.WireFrame f) {
+        lastInboundNanos = System.nanoTime();
         // First-frame: capture the type
         if (resultType == 0) {
             resultType = f.msgType;

@@ -6,7 +6,7 @@
 
     <groupId>ai.particledb</groupId>
     <artifactId>particledb-jdbc</artifactId>
-    <version>1.0.11</version>
+    <version>1.0.12</version>
     <packaging>jar</packaging>
 
     <name>ParticleDB JDBC Driver (PDB-wire v2)</name>

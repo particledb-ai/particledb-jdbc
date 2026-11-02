@@ -5,6 +5,32 @@ based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/). Dates are the Maven
 Central publication dates.
 
+## [1.0.12] - Unreleased
+
+Works with ParticleDB server 1.1.19-rc.17.
+
+### Fixed
+- **`socketTimeout` is honoured.** The URL option was documented (default
+  30000) but never read, so with no `setQueryTimeout` and no
+  `setNetworkTimeout` a call against a server that stopped answering
+  (SIGSTOP, partition) blocked in `Socket.read` forever. It is now the
+  connection's initial network timeout (milliseconds, default 0 = no limit,
+  as pgjdbc): any response wait, including one with part of a frame read,
+  fails `08006` at the bound, every stream waiting on the connection fails
+  with it, and the connection is closed; nothing is resent. Also in
+  `getPropertyInfo` and `PdbDataSource.setSocketTimeout`.
+- **`Statement.cancel()` is bounded.** It only reset the stream; a server that
+  never answered left the caller blocked. Now the connection is aborted if the
+  reset is unanswered after the cancel grace (5 s), as for a query timeout.
+
+### Added
+- **Slow-call warning.** `slowCallWarnMillis` (default 60000, 0 disables):
+  a call with no response from the server for that long logs one WARNING to
+  `org.particledb.jdbc` (connection id, stream id, request kind, elapsed time;
+  never SQL or values), at most once a minute per call. Counted in
+  `getClientInfo("pdb.slowCallWarnings")`; the id is
+  `getClientInfo("pdb.connectionId")`. Also on `PdbDataSource`.
+
 ## [1.0.11] - 2026-10-27
 
 Requires ParticleDB server 1.1.19-rc.15 or later for the full feature set.

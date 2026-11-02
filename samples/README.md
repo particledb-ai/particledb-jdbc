@@ -1,6 +1,6 @@
 # ParticleDB JDBC Samples
 
-Runnable end-to-end examples for `ai.particledb:particledb-jdbc:1.0.11`.
+Runnable end-to-end examples for `ai.particledb:particledb-jdbc:1.0.12`.
 
 Each main class is self-contained - boot a ParticleDB engine on its
 default ports, then run any sample with `mvn exec:exec`.
@@ -58,5 +58,5 @@ PG_URL="jdbc:postgresql://prod-host:5432/myapp" \
 
 This module is intentionally NOT published to Maven Central. It's a
 working scaffold for your own apps to copy. The reference driver is
-`ai.particledb:particledb-jdbc:1.0.11` - the only thing that needs to
+`ai.particledb:particledb-jdbc:1.0.12` - the only thing that needs to
 be on your classpath.

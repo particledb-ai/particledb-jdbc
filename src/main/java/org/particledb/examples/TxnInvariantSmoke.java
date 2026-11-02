@@ -20,12 +20,12 @@
 //   mvn -q -DskipTests package
 //
 // Run (PG wire via pgjdbc):
-//   java -cp particledb-jdbc-1.0.11.jar:postgresql-42.7.4.jar \
+//   java -cp particledb-jdbc-1.0.12.jar:postgresql-42.7.4.jar \
 //        org.particledb.examples.TxnInvariantSmoke \
 //        jdbc:postgresql://node1:5432/postgres admin '' bank
 //
 // Run (native wire via this driver, multiplexed):
-//   java -cp particledb-jdbc-1.0.11.jar \
+//   java -cp particledb-jdbc-1.0.12.jar \
 //        org.particledb.examples.TxnInvariantSmoke \
 //        jdbc:particledb://node1:7173/postgres admin '' bank
 

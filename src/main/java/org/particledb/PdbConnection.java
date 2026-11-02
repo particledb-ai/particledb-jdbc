@@ -351,6 +351,21 @@ public final class PdbConnection implements Connection {
 
     private volatile boolean closed = false;
     private volatile int networkTimeoutMillis;
+
+    private static final java.util.logging.Logger LOGGER = java.util.logging.Logger.getLogger("org.particledb.jdbc");
+    private static final java.util.concurrent.atomic.AtomicLong CONNECTION_IDS = new java.util.concurrent.atomic.AtomicLong();
+    /** This connection's id in diagnostics ({@code getClientInfo("pdb.connectionId")}). */
+    private final String connectionId = "pdb-" + CONNECTION_IDS.incrementAndGet();
+    /** Default {@code slowCallWarnMillis}: warn once a call has had no response for a minute. */
+    static final int DEFAULT_SLOW_CALL_WARN_MILLIS = 60_000;
+    /** A call's slow-call warning repeats at most this often. */
+    static final long SLOW_CALL_REPEAT_NANOS = TimeUnit.MINUTES.toNanos(1);
+    /** Wait with no response after which a call logs a WARNING; 0 = never. */
+    private int slowCallWarnMillis = DEFAULT_SLOW_CALL_WARN_MILLIS;
+    private final java.util.concurrent.atomic.AtomicLong slowCallWarnings = new java.util.concurrent.atomic.AtomicLong();
+    /** Client-info keys the driver reports itself (read-only). */
+    static final String CLIENT_INFO_CONNECTION_ID = "pdb.connectionId";
+    static final String CLIENT_INFO_SLOW_CALL_WARNINGS = "pdb.slowCallWarnings";
     private long startupDeadline = Long.MAX_VALUE;
     /**
      * The isolation level the SERVER will run this connection's next
@@ -419,6 +434,20 @@ public final class PdbConnection implements Connection {
         int connectTimeoutMs = Pgcompat.intParam(parsed.params, "connectTimeout", 30_000);
         if (connectTimeoutMs <= 0) throw new SQLException("connectTimeout must be > 0", "22023");
         connectTimeoutMs = startupWaitMillis(connectTimeoutMs);
+        // socketTimeout (milliseconds; 0 = no limit, pgjdbc's default) is the
+        // connection's initial network timeout -- exactly what
+        // setNetworkTimeout sets: every wait for a response is bounded by it,
+        // and on expiry the connection is closed (08006). Through 1.0.11 it was
+        // documented here and in Pgcompat but NOT READ, so a URL with
+        // socketTimeout=15000 against a SIGSTOPped server blocked in
+        // Socket.read with SO_TIMEOUT 0 for hours.
+        int socketTimeoutMs = Pgcompat.intParam(parsed.params, "socketTimeout", 0);
+        if (socketTimeoutMs < 0) throw new SQLException("socketTimeout must be >= 0", "22023");
+        // The alert for socketTimeout=0: a call with no response for this long
+        // logs one WARNING (see waitWarning). 0 disables it.
+        this.slowCallWarnMillis = Pgcompat.intParam(parsed.params, "slowCallWarnMillis",
+                DEFAULT_SLOW_CALL_WARN_MILLIS);
+        if (slowCallWarnMillis < 0) throw new SQLException("slowCallWarnMillis must be >= 0", "22023");
 
         // PG-compat metadata identity. Default ON so Flyway / Hibernate / jOOQ
         // pick their PostgreSQL dialect out of the box. `pgReportedVersion`
@@ -460,6 +489,8 @@ public final class PdbConnection implements Connection {
         this.mux = new StreamMux(SharedEventLoop.group(), preferUnixSocket, connectTimeoutMs,
                                  maxStreamsPerConn, requireMux, unixSocketDir, unixSocketPath);
         this.mux.configureTls(org.particledb.wire.TlsOptions.fromParams(parsed.params));
+        this.networkTimeoutMillis = socketTimeoutMs;
+        this.mux.setNetworkTimeout(socketTimeoutMs);
         WireV2Codec.HelloOk hello;
         // The session runs in the JVM's zone, as pgjdbc's does: sent in the
         // HELLO (the native wire's startup parameters), so it is the session's
@@ -701,7 +732,11 @@ public final class PdbConnection implements Connection {
 
     /** {@link PdbStatement#cancel()}: reset the request's stream (see {@link StreamMux#cancel}). */
     void cancelRequest(java.util.concurrent.Future<StreamState.StreamResult> f) {
-        mux.cancel(f);
+        // Bounded: a server that never answers the reset (stopped, partitioned)
+        // must not leave the cancelled caller blocked on the socket. After the
+        // grace the outcome is unknown and the connection is closed, as for a
+        // query timeout (isClosed() then reports the aborted mux).
+        mux.cancel(f, TimeUnit.SECONDS.toMillis(CANCEL_GRACE_SECONDS));
     }
 
     /** Default per-statement wire wait when no {@code setQueryTimeout} was set. */
@@ -737,10 +772,17 @@ public final class PdbConnection implements Connection {
                 // arrive (StreamedRows) instead of after the last one. The
                 // query timeout bounds the wait for the FIRST chunk.
                 StreamState st = ((StreamState.DrivenFuture) f).streamState();
-                mux.driveUntil(st, st::firstChunkOrDone, deadline);
+                waitWarning(st, deadline, until -> {
+                    mux.driveUntil(st, st::firstChunkOrDone, until);
+                    return null;
+                });
                 if (st.attachStreaming()) {
                     return StreamState.StreamResult.arrowStreamed(new StreamedRows(this, mux, st).readSchema());
                 }
+            }
+            if (slowCallWarnMillis > 0 && f instanceof StreamState.DrivenFuture) {
+                return waitWarning(((StreamState.DrivenFuture) f).streamState(), deadline,
+                        until -> f.get(Math.max(0, until - System.nanoTime()), TimeUnit.NANOSECONDS));
             }
             return deadline == Long.MAX_VALUE ? f.get()
                     : f.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
@@ -756,6 +798,8 @@ public final class PdbConnection implements Connection {
             // known and the connection stays in service. Only a request that
             // still has not answered is ambiguous: then, as before, the
             // connection is closed so no pool hands it on mid-statement.
+            // The plain reset: this thread bounds the grace itself, and an
+            // abort from a watchdog here would surface as the server's answer.
             if (mux.cancel(f)) {
                 try {
                     long grace = Math.min(TimeUnit.SECONDS.toNanos(CANCEL_GRACE_SECONDS),
@@ -779,6 +823,55 @@ public final class PdbConnection implements Connection {
             if (owner != null) owner.inflight = null;
         }
     }
+
+    /** One bounded wait of {@link #waitWarning}: return, or TimeoutException at {@code until}. */
+    interface BoundedWait<T> {
+        T run(long untilNanos) throws Exception;
+    }
+
+    /**
+     * Run {@code wait} to {@code deadline}, logging a WARNING whenever the
+     * stream has had no response for {@code slowCallWarnMillis} -- the alert
+     * that stands in for a timeout when {@code socketTimeout=0}. The wait is
+     * split at warning points; a split is safe because the frame reader keeps
+     * a partial frame buffered across a timed-out read. Each call warns at most
+     * once per {@link #SLOW_CALL_REPEAT_NANOS}. The message names the
+     * connection, stream, request kind and elapsed time, never SQL or values.
+     * Only a TimeoutException at {@code deadline} itself is thrown.
+     */
+    <T> T waitWarning(StreamState st, long deadline, BoundedWait<T> wait) throws Exception {
+        int warnMillis = slowCallWarnMillis;
+        if (warnMillis <= 0) return wait.run(deadline);
+        long warnNanos = TimeUnit.MILLISECONDS.toNanos(warnMillis);
+        long start = System.nanoTime();
+        long nextWarn = start + warnNanos;
+        while (true) {
+            long until = Math.min(deadline, nextWarn);
+            try {
+                return wait.run(until);
+            } catch (java.util.concurrent.TimeoutException te) {
+                long now = System.nanoTime();
+                if (until == deadline || now - deadline >= 0) throw te;
+                long quietSince = Math.max(start, st.lastInboundNanos());
+                if (now - quietSince >= warnNanos) {
+                    slowCallWarnings.incrementAndGet();
+                    LOGGER.warning("ParticleDB JDBC slow call: connection " + connectionId
+                            + " stream " + st.streamId + " " + st.requestKind()
+                            + " waited " + TimeUnit.NANOSECONDS.toMillis(now - start)
+                            + " ms, no response for " + TimeUnit.NANOSECONDS.toMillis(now - quietSince)
+                            + " ms (network timeout " + (networkTimeoutMillis == 0 ? "none"
+                                    : networkTimeoutMillis + " ms")
+                            + "; set socketTimeout to bound it, slowCallWarnMillis=0 to silence)");
+                    nextWarn = now + Math.max(SLOW_CALL_REPEAT_NANOS, warnNanos);
+                } else {
+                    nextWarn = quietSince + warnNanos;
+                }
+            }
+        }
+    }
+
+    /** Slow-call warnings this connection has logged. */
+    public long slowCallWarnings() { return slowCallWarnings.get(); }
 
     long networkDeadline() {
         int timeout = networkTimeoutMillis;
@@ -2011,8 +2104,18 @@ public final class PdbConnection implements Connection {
     }
     @Override public void setClientInfo(String name, String value) { clientInfo.setProperty(name, value); }
     @Override public void setClientInfo(Properties properties) throws SQLClientInfoException { clientInfo.putAll(properties); }
-    @Override public String getClientInfo(String name) { return clientInfo.getProperty(name); }
-    @Override public Properties getClientInfo() { return new Properties(clientInfo); }
+    @Override public String getClientInfo(String name) {
+        if (CLIENT_INFO_CONNECTION_ID.equals(name)) return connectionId;
+        if (CLIENT_INFO_SLOW_CALL_WARNINGS.equals(name)) return Long.toString(slowCallWarnings.get());
+        return clientInfo.getProperty(name);
+    }
+    @Override public Properties getClientInfo() {
+        Properties p = new Properties();
+        p.putAll(clientInfo);
+        p.setProperty(CLIENT_INFO_CONNECTION_ID, connectionId);
+        p.setProperty(CLIENT_INFO_SLOW_CALL_WARNINGS, Long.toString(slowCallWarnings.get()));
+        return p;
+    }
     /**
      * An SQL array of {@code type} (text / varchar, int2, int4, int8, float4,
      * float8, bool, numeric, uuid, timestamp, timestamptz, date, bytea, json,

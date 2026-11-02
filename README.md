@@ -2,7 +2,7 @@
 
 JDBC access to ParticleDB for Java applications and connection pools. Requires Java 11 or later. No JVM flags are needed on any JDK; see [No JVM flags](#no-jvm-flags).
 
-This checkout contains the `1.0.11` release. Earlier published artifacts do not contain all changes in this checkout.
+This checkout contains the `1.0.12` release. Earlier published artifacts do not contain all changes in this checkout.
 
 ## Install from this checkout
 
@@ -14,7 +14,7 @@ mvn -DskipTests install
 <dependency>
   <groupId>ai.particledb</groupId>
   <artifactId>particledb-jdbc</artifactId>
-  <version>1.0.11</version>
+  <version>1.0.12</version>
 </dependency>
 ```
 
@@ -163,7 +163,7 @@ Set `Statement.setFetchSize` to a positive number to decode results a batch at a
 
 `setQueryTimeout(seconds)` limits a statement, including batches. Its JDBC default is 0, meaning no statement limit. Cancellation requests stop the statement when the server supports them. The connection can be reused after the server confirms the outcome. If no answer arrives within the cancellation grace period, the connection closes because the outcome is unknown. Statements are never automatically replayed.
 
-`setNetworkTimeout(executor, milliseconds)` bounds response waits and closes the connection on expiry. `connectTimeout` is in milliseconds (default 30000). `DataSource.setLoginTimeout` is in seconds and bounds login, including authentication.
+`setNetworkTimeout(executor, milliseconds)` bounds response waits and closes the connection on expiry (SQLSTATE `08006`; the request is not resent). The `socketTimeout` URL option (milliseconds, default 0 = no limit) sets its initial value, so `socketTimeout=15000` makes a call against a server that stops answering fail after 15 seconds. `Statement.cancel()` from another thread ends the call even when the server never answers: after the cancellation grace period the connection closes. With the default `socketTimeout=0` a call against a server that stopped answering waits until it is cancelled, so the driver alerts instead: once a call has had no response for `slowCallWarnMillis` (default 60000; 0 disables) it logs one WARNING to the `org.particledb.jdbc` logger (java.util.logging) naming the connection id, stream id, request kind (QUERY, EXECUTE, ...) and elapsed time, never SQL text or parameter values, repeated at most once a minute per call. `getClientInfo("pdb.slowCallWarnings")` counts them and `getClientInfo("pdb.connectionId")` gives the id the warning names. `connectTimeout` is in milliseconds (default 30000). `DataSource.setLoginTimeout` is in seconds and bounds login, including authentication.
 
 Errors preserve SQLSTATE: `23505` for a unique violation, `40001` for a serialization failure, `57014` for cancellation and class `08` for connection failures. Retry a complete transaction only when the application can safely repeat it.
 

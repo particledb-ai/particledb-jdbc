@@ -47,8 +47,12 @@ import java.util.Properties;
  *     <li>{@code connectTimeout} (millis) - TCP + handshake timeout.
  *         Default 30000 (canonical default per
  *         the "URL options" table in README.md).</li>
- *     <li>{@code socketTimeout} (millis) - per-call read timeout.
- *         Default 30000.</li>
+ *     <li>{@code socketTimeout} (millis) - network timeout: the longest any
+ *         wait for a server response may take, including a read that has
+ *         received part of a frame; on expiry the call fails 08006, the
+ *         connection is closed and the request is not resent. The initial
+ *         value of {@code Connection.setNetworkTimeout}. Default 0 (no limit,
+ *         as pgjdbc). (Through 1.0.11 this was listed here but never read.)</li>
  *     <li>{@code tcpNoDelay} (boolean) - Default true.</li>
  *     <li>{@code preferUnixSocket} (boolean) - connect over the server's
  *         Unix socket {@code <unixSocketDir>/.s.PDB.<port>} when the host is

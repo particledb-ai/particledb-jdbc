@@ -82,7 +82,7 @@ public final class Driver implements java.sql.Driver {
 
     @Override
     public DriverPropertyInfo[] getPropertyInfo(String url, Properties info) {
-        DriverPropertyInfo[] props = new DriverPropertyInfo[18];
+        DriverPropertyInfo[] props = new DriverPropertyInfo[20];
         props[0] = mk("user", "",
                 "Login role, sent as the wire credential frame at connect time");
         props[1] = mk("password", "",
@@ -135,6 +135,15 @@ public final class Driver implements java.sql.Driver {
                 + "type, no JVM option), or arrow (Apache Arrow Java, which the application adds; "
                 + "needs " + ArrowDecoder.ADD_OPENS_FLAG + " on JDK 16+)");
         props[17].choices = new String[] {"auto", "arrow", "builtin"};
+        props[18] = mk("socketTimeout", "0",
+                "Network timeout, milliseconds (0 = none): the longest any wait for a "
+                + "server response may take; on expiry the connection is closed (08006) and "
+                + "the request is not resent. The initial value of Connection.setNetworkTimeout");
+        props[19] = mk("slowCallWarnMillis", String.valueOf(PdbConnection.DEFAULT_SLOW_CALL_WARN_MILLIS),
+                "A call with no response from the server for this many milliseconds logs one WARNING "
+                + "(logger org.particledb.jdbc; connection id, stream id, request kind, elapsed time; "
+                + "never SQL or values), repeated at most once a minute; 0 disables. "
+                + "Counted in getClientInfo(\"pdb.slowCallWarnings\")");
         return props;
     }
 

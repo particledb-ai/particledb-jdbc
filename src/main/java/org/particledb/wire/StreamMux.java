@@ -580,6 +580,9 @@ public final class StreamMux implements AutoCloseable, StreamState.Driver {
      * the connection is then unusable, every other open stream's).
      */
     public CompletableFuture<StreamState.StreamResult> send(StreamState s, ByteBuf frame) {
+        // v2 header: [version][type]...; v1 header: [len u32][sid u16][type][flags].
+        int typeAt = frame.readerIndex() + (v2Active ? 1 : 6);
+        if (frame.readableBytes() > typeAt - frame.readerIndex()) s.requestType = frame.getByte(typeAt);
         try {
             writeFrame(frame);
         } catch (IOException e) {
@@ -611,6 +614,29 @@ public final class StreamMux implements AutoCloseable, StreamState.Driver {
         } catch (IOException e) {
             return false;
         }
+    }
+
+    /**
+     * {@link #cancel(java.util.concurrent.Future)}, bounded: if {@code f} has
+     * still not completed {@code abortAfterMillis} after the reset is sent, the
+     * connection is ABORTED, which fails {@code f} (and every other open stream)
+     * and wakes whichever thread is blocked reading the socket. A server that
+     * never answers -- SIGSTOPped, partitioned -- so cannot hold a cancelled
+     * caller forever. The watchdog is armed BEFORE the reset is written, so a
+     * reset write that blocks on a full send buffer is ended by it too.
+     */
+    public boolean cancel(java.util.concurrent.Future<StreamState.StreamResult> f, long abortAfterMillis) {
+        if (!(f instanceof StreamState.DrivenFuture) || f.isDone() || !v2Active || closed) return false;
+        StreamState.DrivenFuture df = (StreamState.DrivenFuture) f;
+        java.util.concurrent.ScheduledFuture<?> watchdog = DEADLINES.schedule(() -> {
+            if (!df.isDone()) abort();
+        }, Math.max(1, abortAfterMillis), TimeUnit.MILLISECONDS);
+        df.whenComplete((r, t) -> watchdog.cancel(false));
+        if (cancel(f)) return true;
+        // Nothing was reset (the request finished meanwhile, or the write
+        // failed and the connection is gone): the watchdog has nothing to bound.
+        watchdog.cancel(false);
+        return false;
     }
 
     /**

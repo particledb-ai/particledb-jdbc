@@ -43,7 +43,21 @@ Non-obvious constraints:
 - **A timed-out request is reset, not abandoned**: `await` sends
   `RST_STREAM(CANCEL)` and waits `CANCEL_GRACE_SECONDS` for the server's answer;
   only a request that still has not answered closes the connection (its
-  outcome is unknown).
+  outcome is unknown). `Statement.cancel()` (`cancelRequest`) is bounded the
+  same way: `StreamMux.cancel(f, graceMillis)` aborts the connection if the
+  reset is never answered, so a stopped server cannot hold a cancelled caller.
+- **Every response wait is bounded by the network timeout** when one is set:
+  the URL's `socketTimeout` (milliseconds, default 0 = none) is its initial
+  value, `setNetworkTimeout` changes it, and `await` / `StreamedRows` fold it
+  into the deadline the frame reader reads under. On expiry the connection is
+  closed (08006), never retried. Through 1.0.11 `socketTimeout` was documented
+  and not read (`UnresponsiveServerTimeoutTest`).
+- **The slow-call warning** (`slowCallWarnMillis`, default 60000) is the alert
+  for `socketTimeout=0`: `PdbConnection.waitWarning` splits each response wait
+  at warning points (safe: the frame reader keeps partial frames) and logs one
+  WARNING per minute per call when the stream has had no frame
+  (`StreamState.lastInboundNanos`) that long. It names ids and the request kind
+  (`StreamState.requestKind`), never SQL or values (`SlowCallWarningTest`).
 - **One session per socket.** The server keeps one session (transaction,
   settings) per connection, so two `Connection`s must never share a socket;
   concurrency inside one `Connection` is what the multiplexing is for.
